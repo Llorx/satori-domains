@@ -1,0 +1,22 @@
+{
+    "name": "satori-domains",
+    "version": "0.0.1",
+    "description": "Will update Satori.com domains Open Data channel with added/removed domains from almost 1 thousand of TLDs",
+    "main": "main.js",
+    "dependencies": {
+        "co": "^4.6.0",
+        "fast-download": "^0.3.6",
+        "follow-redirects": "^1.2.3",
+        "satori-sdk-js": "^1.0.1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Llorx/satori-domains.git"
+    },
+    "author": "Llorx",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/Llorx/satori-domains/issues"
+    },
+    "homepage": "https://github.com/Llorx/satori-domains#readme"
+}
