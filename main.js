@@ -11,6 +11,12 @@ const { spawn } = require("child_process");
 var { https } = require("follow-redirects");
 var co = require("co");
 var FastDownload = require("fast-download");
+var RTM = require("satori-sdk-js"); // TODO: Deprecated
+var JSFtp = require("jsftp");
+
+promisify(JSFtp, {
+    yes: ["get", "ls"]
+}); // Convert callbacks to Promises to easier yield
 
 // Credentials file
 var credentials = require("./credentials.json");
@@ -53,10 +59,25 @@ var registers = ["soa", "ns", "a", "aaaa", "cname", "mx", "ptr"];
 
 // Using the registers, create a command line to filter them from the zonefile
 var awkarray = [];
+var awkarrayverisign = [];
 for (var i = 0; i < registers.length; i++) {
-    awkarray.push('$4 == "' + registers[i] + '"');
+    awkarray.push('\\$4 == \\"' + registers[i] + '\\"');
+    awkarrayverisign.push('\\$2 == \\"' + registers[i].toUpperCase() + '\\"');
 }
-var unzippipe = "gunzip -c " + tempName + " | awk '" + awkarray.join(" || ") + " {print $1, $4, $5}' | sort --parallel=1 -k1,1 -k2,2 -k3,3 | tee zones/[ZONE].dns.txt2 | awk '{print $1}' | sort --parallel=1 -uo zones/[ZONE].domains.txt2";
+
+/**
+ * Operations made in command lines as is faster and can be easily parallelized:
+ * LC_ALL=C means bitwise comparison instead of UTF8 comparisons. Prevents conversion so is faster.
+ * parallel creates multiple jobs to multithread a command
+ * sort can be parallelized but needs to have big data to get it enabled. -S 25% means to load 25% of RAM. -S 1G also works
+ * mawk is faster than awk
+ */
+var unzippipe = "export LC_ALL=C; pigz -dc " + tempName + " | parallel --jobs 4 --pipe mawk \\'" + awkarray.join(" \\|\\| ") + " {print \\$1, \\$4, \\$5}\\' | sort -S25% --parallel=4 -k1,1 -k2,2 -k3,3 | tee zones/[ZONE].dns.txt2 | parallel --jobs 4 --pipe mawk \\'{print \\$1}\\' | sort -S25% --parallel=4 -uo zones/[ZONE].domains.txt2"
+var unzippipeverisign = "export LC_ALL=C; pigz -dc " + tempName + " | parallel --jobs 4 --pipe mawk \\'" + awkarrayverisign.join(" \\|\\| ") + " {print tolower\\(\\$1\\), tolower\\(\\$2\\), tolower\\(\\$3\\)}\\' | sort -S25% --parallel=4 -k1,1 -k2,2 -k3,3 | tee zones/[ZONE].dns.txt2 | parallel --jobs 4 --pipe mawk \\'{print \\$1}\\' | sort -S25% --parallel=4 -uo zones/[ZONE].domains.txt2"
+
+// verisignEndpoints
+var comnetftp = "rz.verisign-grs.com";
+var nameftp = "rzname.verisign-grs.com";
 
 // Working folder
 try {
@@ -119,7 +140,7 @@ function* wait(time) {
     });
 }
 
-function* downloadFile(el) {
+function downloadFile(el) {
     return new Promise(function(accept, reject) {
         new FastDownload("http://" + host + el, {
             destFile: tempName,
@@ -191,52 +212,80 @@ function nextLine(interface) {
     });
 }
 
-function* downloadZone(el, zone) {
+function* checkZone(zone, isverisign) {
     var line, srt, rdline, cmd;
 
-    // Predownload file instead of streaming the download stream directly to unzip, as long-lasting connections may be closed
-    yield downloadFile(el);
-
     // Prepare and run the command to unzip, filter and sort
-    cmd = unzippipe.replace(/\[ZONE\]/g, zone);
+    cmd = (isverisign ? unzippipeverisign : unzippipe).replace(/\[ZONE\]/g, zone);
     yield command("/bin/sh", ["-c", cmd]);
 
     // If there are previous files, diff them and push changes to Satori
     if (fs.existsSync("zones/" + zone + ".dns.txt") && fs.existsSync("zones/" + zone + ".domains.txt")) {
-        srt = spawn("diff", ["--speed-large-files", "zones/" + zone + ".dns.txt", "zones/" + zone + ".dns.txt2"]);
+        // comm is for detecting changes in sorted files and is faster that any diff, rdiff or whatever, and can handle huge files.
+        srt = spawn("/bin/sh", ["-c", "export LC_ALL=C; comm --nocheck-order --output-delimiter=\"|\" -3 zones/" + zone + ".domains.txt zones/" + zone + ".domains.txt2"]);
         rdline = readline.createInterface({
             input: srt.stdout,
             terminal: false,
             historySize: 0
         });
         while (line = yield nextLine(rdline)) {
-            line = line[0];
-            var cmd = line[0];
-            if (cmd == "<") {
-                line = line.slice(1).trim().split(/,?\s+/);
-                console.log("Removed DNS", line);
-                // Removed DNS
-            } else if (cmd == ">") {
-                line = line.slice(1).trim().split(/,?\s+/);
-                console.log("Added DNS", line);
-                // Added DNS
+            line = line[0].split("|");
+            if (line[0]) {
+                line = line[0].trim();
+                if (line.slice(-zone.length - 2) == "." + zone + ".") {
+                    line = line.slice(0, line.length - zone.length - 2);
+                }
+                rtm.publish(channel, {
+                    "event": "removed_domain",
+                    "zone": zone,
+                    "domain": line
+                });
+            } else if (line[1]) {
+                line = line[1].trim();
+                if (line.slice(-zone.length - 2) == "." + zone + ".") {
+                    line = line.slice(0, line.length - zone.length - 2);
+                }
+                rtm.publish(channel, {
+                    "event": "new_domain",
+                    "zone": zone,
+                    "domain": line
+                });
             }
         }
-
-        srt = spawn("diff", ["--speed-large-files", "zones/" + zone + ".domains.txt", "zones/" + zone + ".domains.txt2"]);
+        srt = spawn("/bin/sh", ["-c", "export LC_ALL=C; comm --nocheck-order --output-delimiter=\"|\" -3 zones/" + zone + ".dns.txt zones/" + zone + ".dns.txt2"]);
         rdline = readline.createInterface({
             input: srt.stdout,
             terminal: false,
             historySize: 0
         });
         while (line = yield nextLine(rdline)) {
-            line = line[0];
-            if (line[0] == "<") {
-                console.log("Removed DOMAIN", line);
-                // Removed DOMAIN
-            } else if (line[0] == ">") {
-                console.log("Added DOMAIN", line);
-                // Added DOMAIN
+            line = line[0].split("|");
+            if (line[0]) {
+                line = line[0].trim().split(/,?\s+/);
+                var domain = line[0];
+                if (domain.slice(-zone.length - 2) == "." + zone + ".") {
+                    domain = domain.slice(0, domain.length - zone.length - 2);
+                }
+                rtm.publish(channel, {
+                    "event": "removed_record",
+                    "zone": zone,
+                    "domain": domain,
+                    "type": line[1],
+                    "value": line[2]
+                });
+            } else if (line[1]) {
+                line = line[1].trim().split(/,?\s+/);
+                var domain = line[0];
+                if (domain.slice(-zone.length - 2) == "." + zone + ".") {
+                    domain = domain.slice(0, domain.length - zone.length - 2);
+                }
+                rtm.publish(channel, {
+                    "event": "new_record",
+                    "zone": zone,
+                    "domain": domain,
+                    "type": line[1],
+                    "value": line[2]
+                });
             }
         }
     }
@@ -270,7 +319,9 @@ function* processZone(el, zone, size) {
     }
     if (Number.isNaN(savedsize) || savedsize != size) {
         console.log("zone", zone, "size", size);
-        yield downloadZone(el, zone);
+        // Predownload file instead of streaming the download stream directly to unzip, as long-lasting connections may be closed
+        yield downloadFile(el);
+        yield checkZone(zone);
         try {
             fs.writeFileSync("zones/" + zone + ".size.txt", size.toString(), "utf8")
         } catch (e) {
@@ -296,11 +347,62 @@ function* processElement(el) {
     }
 }
 
+function ftpConnect(domain) {
+    return new Promise(function(accept, reject) {
+        var ftp = new JSFtp({
+            host: domain,
+            user: credentials.verisign.user,
+            pass: credentials.verisign.password,
+        });
+        ftp.on("connect", function() {
+            accept(ftp);
+        });
+        ftp.on("timeout", reject);
+    });
+}
+
+function* ftpCheck(domain) {
+    var ftp = yield ftpConnect(domain);
+    var list = yield ftp.ls(".");
+    var zones = {
+        "com.zone.gz": "com",
+        "net.zone.gz": "net",
+        "name.zone.gz": "name",
+    };
+    for (var i = 0, file; file = list[i]; i++) {
+        if (zones[file.name]) {
+            var zone = zones[file.name];
+            var savedmodify;
+            try {
+                savedmodify = Number(fs.readFileSync("zones/" + zone + ".time.txt", "utf8"));
+            } catch (e) {
+                savedmodify = 0;
+            }
+            if (Number.isNaN(savedmodify) || savedmodify != file.time) {
+                console.log("zone", zone, "time", file.time);
+                // Predownload file instead of streaming the download stream directly to unzip, as long-lasting connections may be closed
+                console.time("download");
+                yield ftp.get(file.name, tempName);
+                console.timeEnd("download");
+                console.time("check");
+                yield checkZone(zone, true);
+                console.timeEnd("check");
+                try {
+                    fs.writeFileSync("zones/" + zone + ".time.txt", file.time.toString(), "utf8")
+                } catch (e) {
+                }
+            }
+        }
+    }
+}
+
 function* run() {
     var list = yield getList();
     while (list.length > 0) {
         yield processElement(list.shift());
     }
+    yield ftpCheck(comnetftp);
+    // yield ftpCheck(nameftp); // TODO: Wait for IP change confirmation and check if FTP works in server
 }
 
 function start() {
@@ -316,4 +418,35 @@ function start() {
     }).catch(function(e) {
         console.log(e);
     });
+}
+
+function promisify(cls, options) {
+    options = options || {};
+    for (var i in cls.prototype) {
+        if ((!options.not || options.not.indexOf(i) < 0) && (!options.yes || options.yes.indexOf(i) > -1) && typeof cls.prototype[i] === "function") {
+            (function(fn) {
+                cls.prototype[i] = function() {
+                    var args = new Array(arguments.length);
+                    for (var i = 0; i < args.length; i++) {
+                        args[i] = arguments[i];
+                    }
+                    var p = new Promise(function(accept, reject) {
+                        args.push(function(e, r) {
+                            if (e) {
+                                reject(e);
+                            } else {
+                                accept(r);
+                            }
+                        });
+                    });
+                    var ret = fn.apply(this, args);
+                    if (ret === undefined) {
+                        return p;
+                    } else {
+                        return ret;
+                    }
+                };
+            })(cls.prototype[i]);
+        }
+    }
 }
