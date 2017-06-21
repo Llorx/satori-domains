@@ -26,7 +26,7 @@ The events streamed are
 
 The properties are
 
-- `event`, obviously the event type.
+- `event`, the event type (https://goo.gl/Cg4Cy4).
 - `zone`, the TLD of the event, for example for `mydomain.xyz`, the zone is `xyz`
 - `domain`, the domain name with the TLD stripped. For example, for `mydomain.xyz` the domain is `mydomain`.
 - `type`, the DNS record type. Must be any of the ones listed in the [**DNS Records**](#dns-records) section.
@@ -39,7 +39,8 @@ The loop lasts about 2 hours in peeking all the TLDs zonefiles, but this don't m
 - Know when a domain changed `ns`, meaning that has been transferred (usually).
 - Know when a domain has dropped, to register it by yourself.
 - Make statistics of how much domains are created and removed each day per TLD.
-- Knowing the registrars common domains (`domaincontrol.com` for GoDaddy, for example), know how much domains a registrar has registered/lost each day.
+- Know what domains are parked or in *renew phase* by looking at the nameserver name (forgive the redundancy).
+- Knowing the registrars common nameservers (`domaincontrol.com` for GoDaddy, for example), know how much domains a registrar has registered/lost each day.
 - Know the trending words being registered, comparing the words registered on different TLDs for a period of time. For example, early on June 2017 the domain `covfefe` started to appear in a lot of different TLDs, without even being a word.
   
 ## Domain list
