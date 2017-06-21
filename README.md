@@ -961,7 +961,6 @@ The loop lasts about 2 hours in peeking all the TLDs zonefiles, but this don't m
 - yokohama
 - you
 - youtube
-- z
 - zappos
 - zara
 - zero
