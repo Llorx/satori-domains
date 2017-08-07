@@ -11,7 +11,7 @@ const { spawn } = require("child_process");
 var { https } = require("follow-redirects");
 var co = require("co");
 var FastDownload = require("fast-download");
-var RTM = require("satori-sdk-js"); // TODO: Deprecated
+var RTM = require("satori-rtm-sdk"); // TODO: Deprecated
 var JSFtp = require("jsftp");
 
 promisify(JSFtp, {
@@ -235,21 +235,27 @@ function* checkZone(zone, isverisign) {
                 if (line.slice(-zone.length - 2) == "." + zone + ".") {
                     line = line.slice(0, line.length - zone.length - 2);
                 }
-                rtm.publish(channel, {
-                    "event": "removed_domain",
-                    "zone": zone,
-                    "domain": line
-                });
+                try {
+                    rtm.publish(channel, {
+                        "event": "removed_domain",
+                        "zone": zone,
+                        "domain": line
+                    });
+                } catch (e) {
+                }
             } else if (line[1]) {
                 line = line[1].trim();
                 if (line.slice(-zone.length - 2) == "." + zone + ".") {
                     line = line.slice(0, line.length - zone.length - 2);
                 }
-                rtm.publish(channel, {
-                    "event": "new_domain",
-                    "zone": zone,
-                    "domain": line
-                });
+                try {
+                    rtm.publish(channel, {
+                        "event": "new_domain",
+                        "zone": zone,
+                        "domain": line
+                    });
+                } catch (e) {
+                }
             }
         }
         srt = spawn("/bin/sh", ["-c", "export LC_ALL=C; comm --nocheck-order --output-delimiter=\"|\" -3 zones/" + zone + ".dns.txt zones/" + zone + ".dns.txt2"]);
@@ -266,26 +272,32 @@ function* checkZone(zone, isverisign) {
                 if (domain.slice(-zone.length - 2) == "." + zone + ".") {
                     domain = domain.slice(0, domain.length - zone.length - 2);
                 }
-                rtm.publish(channel, {
-                    "event": "removed_record",
-                    "zone": zone,
-                    "domain": domain,
-                    "type": line[1],
-                    "value": line[2]
-                });
+                try {
+                    rtm.publish(channel, {
+                        "event": "removed_record",
+                        "zone": zone,
+                        "domain": domain,
+                        "type": line[1],
+                        "value": line[2]
+                    });
+                } catch (e) {
+                }    
             } else if (line[1]) {
                 line = line[1].trim().split(/,?\s+/);
                 var domain = line[0];
                 if (domain.slice(-zone.length - 2) == "." + zone + ".") {
                     domain = domain.slice(0, domain.length - zone.length - 2);
                 }
-                rtm.publish(channel, {
-                    "event": "new_record",
-                    "zone": zone,
-                    "domain": domain,
-                    "type": line[1],
-                    "value": line[2]
-                });
+                try {
+                    rtm.publish(channel, {
+                        "event": "new_record",
+                        "zone": zone,
+                        "domain": domain,
+                        "type": line[1],
+                        "value": line[2]
+                    });
+                } catch (e) {
+                }    
             }
         }
     }
